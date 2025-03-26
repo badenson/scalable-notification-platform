@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Core components for the notification platform
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Environment name (dev/staging/prod)
+
+Resources:
+  # SNS Topic for notifications
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "notification-topic-${EnvironmentName}"
+      KmsMasterKeyId: alias/aws/sns
+
+  # Dead Letter Queue for failed messages
+  NotificationDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "notification-dlq-${EnvironmentName}"
+      MessageRetentionPeriod: 1209600 # 14 days
+
+  # Main processing queue
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "notification-queue-${EnvironmentName}"
+      VisibilityTimeout: 300
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt NotificationDLQ.Arn
+        maxReceiveCount: 3
+      KmsMasterKeyId: alias/aws/sqs
+
+  # SNS Subscription to send messages to SQS
+  NotificationSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      Endpoint: !GetAtt NotificationQueue.Arn
+      TopicArn: !Ref NotificationTopic
+
+  # IAM Role for Lambda functions
+  NotificationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "notification-lambda-role-${EnvironmentName}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "notification-lambda-policy-${EnvironmentName}"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt NotificationQueue.Arn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref NotificationTopic
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              # Add other necessary permissions here
+
+Outputs:
+  NotificationTopicArn:
+    Description: ARN of the notification topic
+    Value: !Ref NotificationTopic
+    Export:
+      Name: !Sub "${EnvironmentName}-NotificationTopicArn"
+  NotificationQueueUrl:
+    Description: URL of the notification queue
+    Value: !Ref NotificationQueue
+    Export:
+      Name: !Sub "${EnvironmentName}-NotificationQueueUrl"

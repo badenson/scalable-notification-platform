@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Step Functions for notification processing
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+  NotificationTopicArn:
+    Type: String
+  EmailSenderLambdaArn:
+    Type: String
+  PushNotificationLambdaArn:
+    Type: String
+  SmsSenderLambdaArn:
+    Type: String
+
+Resources:
+  # Email Notification State Machine
+  EmailNotificationStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "email-notification-${EnvironmentName}"
+      StateMachineType: EXPRESS
+      RoleArn: !GetAtt StepFunctionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Email notification workflow",
+          "StartAt": "ValidateInput",
+          "States": {
+            "ValidateInput": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${InputValidatorLambdaArn}",
+                "Payload": {
+                  "input.$": "$"
+                }
+              },
+              "Next": "SendEmail",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ]
+            },
+            "SendEmail": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${EmailSenderLambdaArn}",
+                "Payload": {
+                  "input.$": "$"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+
+  # Similar state machines for SMS and Push notifications...
+
+  # IAM Role for Step Functions
+  StepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "notification-stepfunction-role-${EnvironmentName}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "notification-stepfunction-policy-${EnvironmentName}"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Ref EmailSenderLambdaArn
+                  - !Ref PushNotificationLambdaArn
+                  - !Ref SmsSenderLambdaArn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref NotificationTopicArn
+
+Outputs:
+  EmailStateMachineArn:
+    Description: ARN of the email state machine
+    Value: !Ref EmailNotificationStateMachine
+    Export:
+      Name: !Sub "${EnvironmentName}-EmailStateMachineArn"
+  # Similar outputs for other state machines...
